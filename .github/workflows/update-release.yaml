@@ -1,6 +1,11 @@
 name: Update release
 on:
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Release Branch'
+        required: true
+        type: string
 jobs:
   sync:
     runs-on: ubuntu-latest
@@ -9,7 +14,7 @@ jobs:
       - run: |
           git remote add openatom https://github.com/deepin-community/linyaps-box
           git fetch openatom --no-tags
-          git reset --hard openatom/release/2.0
+          git reset --hard openatom/${{ inputs.branch }}
           rm -r .github || true
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
