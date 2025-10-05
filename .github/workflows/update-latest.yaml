@@ -38,9 +38,9 @@ jobs:
           git checkout deepin/release/2.1 -- debian
 
           # 根据 changelog 自动写 debian/watch
-          VER=$(dpkg-parsechangelog -S Version)
-          UVER=${VER%%-*}
-          printf 'version=4\nopts="mode=git,pgpmode=none,gitmode=shallow,pretty=format:%s" https://github.com/OpenAtom-Linyaps/linyaps-box.git HEAD\n' "$UVER" > debian/watch
+          # VER=$(dpkg-parsechangelog -S Version)
+          # UVER=${VER%%-*}
+          # printf 'version=4\nopts="mode=git,pgpmode=none,gitmode=shallow,pretty=format:%s" https://github.com/OpenAtom-Linyaps/linyaps-box.git HEAD\n' "$UVER" > debian/watch
 
           # 避免循环触发
           rm -rf .github || true
@@ -74,8 +74,13 @@ jobs:
           git checkout obs_latest
 
           # 生成 orig.tar.*（放到上一级目录）
-          uscan --force-download --rename --verbose
-
+          # uscan --force-download --rename --verbose
+          # 版本信息
+          VER=$(dpkg-parsechangelog -SVersion)      # e.g. 1:1.9.13-1deepin
+          PKG=$(dpkg-parsechangelog -SSource)       # e.g. linglong
+          UVER="${VER#*:}"; UVER="${UVER%-*}"       # 去 epoch + 去 deb 修订 → 1.9.13                
+          # 用 tar 打“纯上游” orig（带过滤与顶层目录重命名）
+          tar -cJf "../${PKG}_${UVER}.orig.tar.xz" .
           # 构建 source-only 包（生成 .dsc/.debian.tar.* 到上一级目录）
           dpkg-buildpackage -S -us -uc -d
 
