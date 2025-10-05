@@ -75,6 +75,10 @@ jobs:
 
           # 生成 orig.tar.*（放到上一级目录）
           # uscan --force-download --rename --verbose
+
+          export QUILT_PATCHES=debian/patches
+          quilt push -a
+          quilt refresh
           # 版本信息
           VER=$(dpkg-parsechangelog -SVersion)      # e.g. 1:1.9.13-1deepin
           PKG=$(dpkg-parsechangelog -SSource)       # e.g. linglong
