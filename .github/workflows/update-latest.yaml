@@ -110,7 +110,7 @@ jobs:
           # 可选：缓存 tailscale 二进制，加快后续任务
           # use-cache: 'true'
           # 可选：让动作等待这些目标可达（缓解“最终一致性”传播延迟）
-          targets: 100.97.154.108 obs.odata.cc
+          targets: obs.odata.cc
         continue-on-error: true
       
       - name: Prepare osc (secrets → env → oscrc)
