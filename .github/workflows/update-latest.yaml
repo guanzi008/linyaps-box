@@ -99,6 +99,7 @@ jobs:
 
           # 连接 Tailscale：创建临时（ephemeral）节点，并打上 tag:ci
       - name: Connect Tailscale (ephemeral)
+        id: connect_tailscale
         uses: tailscale/github-action@v3
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
@@ -110,6 +111,7 @@ jobs:
           # use-cache: 'true'
           # 可选：让动作等待这些目标可达（缓解“最终一致性”传播延迟）
           targets: 100.97.154.108 obs.odata.cc
+        continue-on-error: true
       
       - name: Prepare osc (secrets → env → oscrc)
         env:
@@ -143,8 +145,10 @@ jobs:
           # 自检：API 可达
           osc -A "${OBS_APIURL}" api / >/dev/null || {
             echo "osc api probe failed for ${OBS_APIURL}"; exit 1; }
+        continue-on-error: true   
 
       - name: Upload to OBS (Deepin:23/linyaps-box)
+        if: success() && steps.connect_tailscale.outcome != 'failure'
         env:
           OBS_APIURL: ${{ secrets.OBS_APIURL }}
           OBS_USER:   ${{ secrets.OBS_USER }}
