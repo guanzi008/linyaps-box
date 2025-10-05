@@ -1,33 +1,250 @@
 name: Update latest
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 2 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - run: |
-          git remote add openatom https://github.com/OpenAtom-Linyaps/linyaps-box
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install build & obs tools
+        run: |
+          sudo apt-get update
+          # uscan/mk-origtargz 在 devscripts 里；osc 为 OBS CLI
+          sudo apt-get install -y devscripts git-buildpackage dpkg-dev debhelper quilt fakeroot ca-certificates osc
+
+      - name: Sync code and packaging from upstreams
+        run: |
+          set -euxo pipefail
+
+          # 添加上游
+          git remote add openatom https://github.com/OpenAtom-Linyaps/linyaps-box || true
           git fetch openatom --no-tags
-          git remote add deepin https://github.com/deepin-community/linyaps-box
+
+          git remote add deepin https://github.com/deepin-community/linyaps-box || true
           git fetch deepin --no-tags
+
+          # 以 openatom/master 为基线
           git reset --hard openatom/master
-          git checkout deepin/master debian
-          git checkout deepin/master rpm
+
+          # 仅同步 deepin 2.10 的 debian/ 打包目录
+          git checkout deepin/release/2.1 -- debian
+
+          # 根据 changelog 自动写 debian/watch
+          VER=$(dpkg-parsechangelog -S Version)
+          UVER=${VER%%-*}
+          printf 'version=4\nopts="mode=git,pgpmode=none,gitmode=shallow,pretty=format:%s" https://github.com/OpenAtom-Linyaps/linyaps-box.git HEAD\n' "$UVER" > debian/watch
+
+          # 避免循环触发
           rm -rf .github || true
-      - uses: stefanzweifel/git-auto-commit-action@v5
+
+      - name: Commit as obs_latest (with deepin patches)
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: obs_latest
           create_branch: true
           push_options: --force
-          commit_message: Automated Change
-      - run: |
-          rm -r debian/patches || true
-      - uses: stefanzweifel/git-auto-commit-action@v5
+          commit_message: "Automated Change (sync OpenAtom base + deepin/2.10 packaging)"
+
+      # 如需“无补丁”分支，保留；不需要可删掉下面两步
+      - name: Make nopatch variant
+        run: |
+          set -euxo pipefail
+          rm -rf debian/patches || true
+      - name: Commit as obs_latest_nopatch (without deepin patches)
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
           branch: obs_latest_nopatch
           create_branch: true
           push_options: --force
-          commit_message: Automated Change
+          commit_message: "Automated Change (nopatch variant for non-deepin builds)"
+
+      # —— 从这里开始：在 CI 里直接 uscan + 构建 source 包 ——
+      - name: Build source package (obs_latest)
+        run: |
+          set -euxo pipefail
+          # 用带补丁的分支构建；要换“无补丁”就改成 obs_latest_nopatch
+          git checkout obs_latest
+
+          # 生成 orig.tar.*（放到上一级目录）
+          uscan --force-download --rename --verbose
+
+          # 构建 source-only 包（生成 .dsc/.debian.tar.* 到上一级目录）
+          dpkg-buildpackage -S -us -uc -d
+
+          # 收集产物
+          PKG=$(dpkg-parsechangelog -S Source)
+          VER=$(dpkg-parsechangelog -S Version)
+          UVER=${VER%%-*}
+          mkdir -p dist
+          mv ../${PKG}_${VER}.dsc                 dist/
+          mv ../${PKG}_${VER}.debian.tar.*        dist/ || true
+          mv ../${PKG}_${UVER}.orig.tar.*         dist/
+
+          # 连接 Tailscale：创建临时（ephemeral）节点，并打上 tag:ci
+      - name: Connect Tailscale (ephemeral)
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+          # 可选：固定客户端版本或用最新
+          version: latest
+          # 可选：缓存 tailscale 二进制，加快后续任务
+          use-cache: 'true'
+          # 可选：让动作等待这些目标可达（缓解“最终一致性”传播延迟）
+          targets: 100.97.154.108
+      
+      - name: Prepare osc (secrets → env → oscrc)
+        env:
+          OBS_APIURL: ${{ secrets.OBS_APIURL }}
+          OBS_USER:   ${{ secrets.OBS_USER }}
+          OBS_PASS:   ${{ secrets.OBS_PASS }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y osc ca-certificates
+      
+          # 简单检查 env 是否注入（不打印值，打印长度）
+          test -n "${OBS_APIURL:-}" || { echo "OBS_APIURL is empty"; exit 1; }
+          test -n "${OBS_USER:-}"   || { echo "OBS_USER is empty"; exit 1; }
+          test -n "${OBS_PASS:-}"   || { echo "OBS_PASS is empty"; exit 1; }
+      
+          umask 077
+          # 写两份以兼容不同 osc 版本的默认路径
+          cat > ~/.oscrc <<EOF
+          [general]
+          apiurl = ${OBS_APIURL}
+          sslcertck = 1
+          
+          [${OBS_APIURL}]
+          user = ${OBS_USER}
+          pass = ${OBS_PASS}
+          EOF
+          mkdir -p ~/.config/osc
+          cp ~/.oscrc ~/.config/osc/oscrc
+      
+          # 自检：API 可达
+          osc -A "${OBS_APIURL}" api / >/dev/null || {
+            echo "osc api probe failed for ${OBS_APIURL}"; exit 1; }
+
+      - name: Upload to OBS (Deepin:23/linyaps-box)
+        env:
+          OBS_APIURL: ${{ secrets.OBS_APIURL }}
+          OBS_USER:   ${{ secrets.OBS_USER }}
+          OBS_PASS:   ${{ secrets.OBS_PASS }}
+          OBS_PROJECT: Deepin:23
+          OBS_PACKAGE: linyaps-box
+        run: |
+          set -euxo pipefail
+          # 校验产物
+          ls -l dist
+
+          # 用 osc 上传
+          workdir="$(pwd)"
+          osc -A "$OBS_APIURL" --no-keyring checkout "$OBS_PROJECT" "$OBS_PACKAGE"
+          cd "$OBS_PROJECT/$OBS_PACKAGE"
+
+          # 覆盖旧文件
+          cp -f "$workdir"/dist/* ./
+          osc -A "$OBS_APIURL" addremove
+
+          # 提交
+          osc -A "$OBS_APIURL" commit -m "CI: update sources from obs_latest ($(date -u +%F))"
+      # —— 追加：无补丁分支再次打 source 包 ——
+      - name: Build source package (obs_latest_nopatch) in a fresh worktree
+        run: |
+          set -euxo pipefail
+          git worktree add ../wt-nopatch obs_latest_nopatch
+          cd ../wt-nopatch
+      
+          # 版本信息
+          VER=$(dpkg-parsechangelog -SVersion)      # e.g. 1:1.9.13-1deepin
+          PKG=$(dpkg-parsechangelog -SSource)       # e.g. linglong
+          UVER="${VER#*:}"; UVER="${UVER%-*}"       # 去 epoch + 去 deb 修订 → 1.9.13
+      
+          # 用 tar 打“纯上游” orig（带过滤与顶层目录重命名）
+          tar -cJf "../${PKG}_${UVER}.orig.tar.xz" .
+          # MTIME=$(git log -1 --format=%ct || true)
+          # XZ_OPT="-T0" tar \
+          #   --sort=name --owner=0 --group=0 --numeric-owner \
+          #   ${MTIME:+--mtime="@${MTIME}"} \
+          #   --transform "s,^\./,${PKG}-${UVER}/," \
+          #   --exclude='./debian' \
+          #   --exclude='./.git' --exclude='./.github' \
+          #   --exclude='./dist' --exclude='./dist_*' \
+          #   --exclude='./.osc' --exclude='./Deepin:23' \
+          #   --exclude='./*.orig.tar.*' --exclude='./*.debian.tar.*' --exclude='./*.dsc' \
+          #   -cJf "../${PKG}_${UVER}.orig.tar.xz" \
+          #   .
+
+          # 出 source-only 包
+          dpkg-buildpackage -S -us -uc -d
+      
+          # 收集产物到“主工作区”的 dist_nopatch（注意用 $GITHUB_WORKSPACE）
+          PKG=$(dpkg-parsechangelog -SSource)
+          VER=$(dpkg-parsechangelog -SVersion)
+          UVER="${VER#*:}"; UVER="${UVER%-*}"
+      
+          mkdir -p "$GITHUB_WORKSPACE/dist_nopatch"
+          mv -f ../${PKG}_${VER}.dsc                  "$GITHUB_WORKSPACE/dist_nopatch/"
+          mv -f ../${PKG}_${VER}.debian.tar.*         "$GITHUB_WORKSPACE/dist_nopatch/" || true
+          mv -f ../${PKG}_${UVER}.orig.tar.*          "$GITHUB_WORKSPACE/dist_nopatch/"
+      
+          # 返回主工作区
+          cd "$GITHUB_WORKSPACE"
+
+
+      # —— 追加：为 obs2（build.opensuse.org）准备 osc —— 
+      - name: Prepare osc for obs2 (api.opensuse.org)
+        env:
+          OBS2_APIURL: ${{ secrets.OBS2_APIURL }}   # 建议直接设为 https://api.opensuse.org
+          OBS2_USER:   ${{ secrets.OBS2_USER }}
+          OBS2_PASS:   ${{ secrets.OBS2_PASS }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y osc ca-certificates
+
+          test -n "${OBS2_APIURL:-}" || { echo "OBS2_APIURL is empty"; exit 1; }
+          test -n "${OBS2_USER:-}"   || { echo "OBS2_USER is empty"; exit 1; }
+          test -n "${OBS2_PASS:-}"   || { echo "OBS2_PASS is empty"; exit 1; }
+
+          umask 077
+          mkdir -p ~/.config/osc
+          # 追加另一个 api 段落，不覆盖前面的 oscrc
+          if [ -f ~/.config/osc/oscrc ]; then cp ~/.config/osc/oscrc ~/.oscrc; fi
+          {
+            echo "[${OBS2_APIURL}]"
+            echo "user = ${OBS2_USER}"
+            echo "pass = ${OBS2_PASS}"
+          } >> ~/.oscrc
+          cp ~/.oscrc ~/.config/osc/oscrc
+
+          # 自检
+          osc -A "${OBS2_APIURL}" api / >/dev/null
+
+      # —— 追加：上传无补丁产物到 obs2 —— 
+      - name: Upload to OBS2 (e.g. home:guanzi/linyaps)
+        env:
+          OBS2_APIURL: ${{ secrets.OBS2_APIURL }}
+          OBS2_PROJECT: home:guanzi   # 例如 home:yourname:linyaps
+          OBS2_PACKAGE: linyaps-box   # 例如 linyaps-nopatch
+        run: |
+          set -euxo pipefail
+          ls -l dist_nopatch
+
+          workdir="$(pwd)"
+          osc -A "$OBS2_APIURL" --no-keyring checkout "$OBS2_PROJECT" "$OBS2_PACKAGE"
+          cd "$OBS2_PROJECT/$OBS2_PACKAGE"
+
+          cp -f "$workdir"/dist_nopatch/* ./                   # 覆盖旧文件
+          osc -A "$OBS2_APIURL" addremove
+          osc -A "$OBS2_APIURL" commit -m "CI: update sources from obs_latest_nopatch ($(date -u +%F))"
