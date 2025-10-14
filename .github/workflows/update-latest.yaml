@@ -153,7 +153,7 @@ jobs:
           OBS_APIURL: ${{ secrets.OBS_APIURL }}
           OBS_USER:   ${{ secrets.OBS_USER }}
           OBS_PASS:   ${{ secrets.OBS_PASS }}
-          OBS_PROJECT: Deepin:23
+          OBS_PROJECT: deepin:23
           OBS_PACKAGE: linyaps-box
         run: |
           set -euxo pipefail
