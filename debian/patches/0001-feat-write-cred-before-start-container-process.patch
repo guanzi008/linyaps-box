@@ -1,0 +1,19 @@
+diff --git a/src/linyaps_box/container.cpp b/src/linyaps_box/container.cpp
+index 72b8925..21d7640 100644
+--- a/src/linyaps_box/container.cpp
++++ b/src/linyaps_box/container.cpp
+@@ -1330,6 +1330,14 @@ void execute_process(const linyaps_box::config &config)
+         return ss.str();
+     }();
+ 
++    // NOTE: This node only exists in UOS kernel, it is used to identify child process
++    // running in linyaps container.
++    auto elf_verify_cred = std::filesystem::path{ "/proc/self/attr/elfverify/cred" };
++    if (std::filesystem::exists(elf_verify_cred)) {
++        std::ofstream ofs(elf_verify_cred);
++        ofs << "1";
++    }
++
+     execvpe(c_args.at(0),
+             const_cast<char *const *>(c_args.data()), // NOLINT
+             const_cast<char *const *>(c_env.data())); // NOLINT

@@ -1,0 +1,25 @@
+linglong-box (2.1.3-1) unstable; urgency=medium
+
+  * Rebase Debian packaging on OpenAtom-Linyaps/linyaps-box master.
+  * Refresh UOS elfverify credential patch for the current container
+    process launcher.
+
+ -- guanzi008 <guanzi008@users.noreply.github.com>  Thu, 14 May 2026 00:00:00 +0800
+
+linglong-box (2.1.2-1) unstable; urgency=medium
+
+  * release 2.1.2-1.
+
+ -- dengbo <dengbo@deepin.org>  Fri, 31 Oct 2025 13:22:43 +0800
+
+linglong-box (2.1.0-1) unstable; urgency=medium
+
+  * release 2.1.0-1.
+
+ -- dengbo <dengbo@deepin.org>  Wed, 06 Aug 2025 17:59:08 +0800
+
+linglong-box (1.8.1-1) unstable; urgency=medium
+
+  * release 1.8.1-1.
+
+ -- dengbo <dengbo@deepin.org>  Thu, 10 Apr 2025 13:45:47 +0800
